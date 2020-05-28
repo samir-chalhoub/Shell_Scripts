@@ -1,0 +1,142 @@
+#!/bin/bash
+#
+# chkconfig: 345 89 91
+# description: Script de Firewall da Turma da manha 
+#
+# Script de Firewal Turma manha 15-01-2004
+#
+#
+#     \                 /
+#       \  Internet    /
+#        | 172.16.0.0 |          -----
+#        --------------         | WWW |
+#              |                 -----
+#              | IP_EXT            | WEB_SERVER
+#             ----     NET_DMZ     |
+#            |    |-----------------
+#             ---- IP_DMZ         
+#              |IP_INT
+#              |
+#              |
+#              |
+#              |      NET_INT
+#            ----------------------------
+#            |    |    |    |    |  . . .
+#            =    Clientes
+#            
+#
+IP_INT=192.168.1.100
+IP_DMZ=10.0.0.100
+IP_EXT=172.16.1.100
+INT_INT=eth0
+INT_DMZ=eth2
+INT_EXT=eth1
+NET_DMZ=10.0.0.0/8
+NET_INT=192.168.1.0/24
+WEB_SERVER=10.0.0.1
+ADMIN1=192.168.1.0/24
+ADMIN2=172.16.0.0/16
+DNS=172.16.1.5
+
+case "$1" in
+start)
+echo "Ativando Firewall . . ."
+# Apagando Regras e Zerando os Contadores
+iptables -F INPUT
+iptables -F OUTPUT
+iptables -F FORWARD
+iptables -t nat -F PREROUTING
+iptables -t nat -F POSTROUTING
+iptables -t nat -F OUTPUT
+iptables -Z INPUT
+iptables -Z OUTPUT
+iptables -Z FORWARD
+iptables -t nat -Z PREROUTING
+iptables -t nat -Z POSTROUTING
+iptables -t nat -Z OUTPUT
+iptables -P INPUT ACCEPT
+iptables -P OUTPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -t nat -P PREROUTING ACCEPT
+iptables -t nat -P POSTROUTING ACCEPT
+iptables -t nat -P OUTPUT ACCEPT
+
+# Definindo a Politica Padrao
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+
+# Ativando interface de loopback
+iptables -A INPUT -i lo -j ACCEPT
+
+# Ativando o ssh para o Adminitrador
+iptables -A INPUT -p tcp -i $INT_INT -s $ADMIN1 --dport 22 -j ACCEPT
+iptables -A INPUT -p tcp -i $INT_EXT -s $ADMIN2 --dport 22 -j ACCEPT
+iptables -A INPUT -p tcp -i $INT_DMZ -s $WEB_SERVER --dport 22 -j ACCEPT
+#iptables -A INPUT -p tcp -i $INT_DMZ -s $WEB_SERVER --sport 22 -j ACCEPT
+
+
+# Permitindo o Acesso WEB para os Clientes
+iptables -A FORWARD -p tcp -m tcp -i $INT_INT -s $NET_INT --sport 1024:65535 -m multiport --dports 80,443 -o $INT_EXT -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -p tcp -m tcp -i $INT_EXT -m multiport --sports 80,443 -d $NET_INT --dport 1024:65535 -o $INT_INT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Permitindo Acesso Internet ao WEB SERVER
+iptables -A FORWARD -p tcp -m tcp -i $INT_EXT --sport 1024:65535 -o $INT_DMZ -d $WEB_SERVER --dport 80 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -p tcp -m tcp -o $INT_EXT --dport 1024:65535 -i $INT_DMZ -s $WEB_SERVER --sport 80 -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Permitindo Acesso dos Clientes ao WEB SERVER
+iptables -A FORWARD -p tcp -m tcp -i $INT_INT -s $NET_INT --sport 1024:65535 -o $INT_DMZ -d $WEB_SERVER --dport 80 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -p tcp -m tcp -o $INT_INT -d $NET_INT --dport 1024:65535 -i $INT_DMZ -s $WEB_SERVER --sport 80 -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Permitindo FTP
+iptables -A FORWARD -p tcp -m tcp -i $INT_INT -s $NET_INT --sport 1024:65535 -o $INT_EXT --dport 20:21 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -p tcp -m tcp -o $INT_INT -d $NET_INT --dport 1024:65535 -i $INT_EXT --sport 20:21 -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Permitindo Consultas DNS
+iptables -A FORWARD -p udp -m udp -i $INT_INT -s $NET_INT --sport 1024:65535 -o $INT_EXT -d $DNS --dport 53 -j ACCEPT
+iptables -A FORWARD -p udp -m udp -o $INT_INT -d $NET_INT --dport 1024:65535 -i $INT_EXT -s $DNS --sport 53 -j ACCEPT
+
+# Permitir Acesso SSH para a Internet
+iptables -A FORWARD -p tcp -m tcp -i $INT_INT -s $NET_INT --sport 1024:65535 -o $INT_EXT --dport 22 -m state --state NEW,ESTABLISHED,RELATED -j ACCEPT
+iptables -A FORWARD -p tcp -m tcp -o $INT_INT -d $NET_INT --dport 1024:65535 -i $INT_EXT --sport 22 -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Ativando Mascaramento na saida
+iptables -t nat -A POSTROUTING -s $NET_INT -o eth1 -j MASQUERADE
+
+# Ativando o NAT na DMZ
+iptables -t nat -A PREROUTING -p tcp -m tcp -i $INT_EXT -d $IP_EXT --sport 1024:65535 --dport 80 -j DNAT --to-destination $WEB_SERVER
+iptables -t nat -A POSTROUTING -p tcp -m tcp -o $INT_EXT -s $WEB_SERVER --dport 1024:65535 --sport 80 -j SNAT --to-source $IP_EXT
+
+echo "Feito"
+;;
+stop)
+echo "Desligando o Firewall . . ."
+iptables -F INPUT
+iptables -F OUTPUT
+iptables -F FORWARD
+iptables -t nat -F PREROUTING
+iptables -t nat -F POSTROUTING
+iptables -t nat -F OUTPUT
+iptables -Z INPUT
+iptables -Z OUTPUT
+iptables -Z FORWARD
+iptables -t nat -Z PREROUTING
+iptables -t nat -Z POSTROUTING
+iptables -t nat -Z OUTPUT
+iptables -P INPUT ACCEPT
+iptables -P OUTPUT ACCEPT
+iptables -P FORWARD ACCEPT
+iptables -t nat -P PREROUTING ACCEPT
+iptables -t nat -P POSTROUTING ACCEPT
+iptables -t nat -P OUTPUT ACCEPT
+echo "Feito"
+;;
+status)
+iptables -L -n -v > /tmp/stat.ip
+iptables -t nat -L -n -v >> /tmp/stat.ip
+less /tmp/stat.ip
+rm -f /tmp/stat.ip
+;;
+*)
+echo "Use firewall { start | stop | status }"
+;;
+esac
